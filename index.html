@@ -1,15 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-
-  <head>
-    <meta charset="UTF-8">
-    <title>Untitled</title>
-    
-
-  </head>
-    
-  <body>
-  <html lang="ja">
+<html lang="ja">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -82,7 +71,7 @@
         .search-box {
             flex: 1;
             min-width: 300px;
-            max-width: 450px;
+            max-width: 600px;
             display: flex;
             align-items: center;
             gap: 10px;
@@ -102,10 +91,27 @@
             border-color: var(--primary-color);
         }
 
+        /* 【追加】月選択プルダウンのスタイル */
+        .search-box select {
+            padding: 10px 14px;
+            border: 2px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 0.95rem;
+            outline: none;
+            background-color: var(--white);
+            cursor: pointer;
+            min-width: 150px;
+            transition: border-color 0.2s;
+        }
+        .search-box select:focus {
+            border-color: var(--primary-color);
+        }
+
         .action-buttons {
             display: flex;
             gap: 12px;
             align-items: center;
+            flex-wrap: wrap;
         }
 
         .selection-status {
@@ -133,6 +139,14 @@
             transform: scale(0.98);
         }
 
+        .btn-time {
+            background-color: #64748b; /* 落ち着いたグレー */
+        }
+
+        .btn-time:hover {
+            background-color: #475569;
+        }
+
         .btn-print {
             background-color: var(--primary-color);
         }
@@ -147,6 +161,15 @@
 
         .btn-pdf:hover {
             background-color: #0f766e;
+        }
+
+        /* 削除ボタンのスタイル */
+        .btn-delete {
+            background-color: var(--danger-color);
+        }
+
+        .btn-delete:hover {
+            background-color: #b91c1c;
         }
 
         /* テーブルスタイル */
@@ -218,6 +241,18 @@
             background-color: #e0f2fe !important;
         }
 
+        /* 印刷済み行のスタイル */
+        tr.printed-row {
+            background-color: #f1f5f9 !important; /* 目立たない薄いグレーに変更 */
+        }
+        /* 印刷済みの場合、氏名の前にマークを表示 */
+        tr.printed-row td:nth-child(2)::before {
+            content: "【印刷済】 ";
+            color: #64748b;
+            font-weight: bold;
+            font-size: 0.8rem;
+        }
+
         /* チェックボックスのサイズ調整 */
         input[type="checkbox"] {
             width: 16px;
@@ -256,7 +291,7 @@
         }
 
         /* ==========================================
-           印刷・PDF化用のクエリ (@media print)
+            印刷・PDF化用のクエリ (@media print)
            ========================================== */
         @media print {
             body {
@@ -306,6 +341,14 @@
                 page-break-inside: avoid;
             }
 
+            /* 実際の印刷時には「印刷済」の背景色やテキストを写さない設定 */
+            tr.printed-row {
+                background-color: #ffffff !important;
+            }
+            tr.printed-row td:nth-child(2)::before {
+                display: none !important;
+            }
+
             .badge {
                 padding: 0;
                 background-color: transparent !important;
@@ -330,13 +373,18 @@
 
     <div class="control-panel">
         <div class="search-box">
-            <input type="text" id="searchInput" onkeyup="filterTable()" placeholder="運転者、車両No、日付などで検索...">
+            <input type="text" id="searchInput" onkeyup="filterTable()" placeholder="運転者、車両Noで検索...">
+            <select id="monthSelect" onchange="filterTable()">
+                <option value="all">すべての月</option>
+            </select>
         </div>
 
         <div class="action-buttons">
             <span class="selection-status">選択中: <span id="selectedCount">0</span> 件</span>
+            <button class="btn btn-time" onclick="resetToInitialOrder()">🕒 時間順に戻す</button>
             <button class="btn btn-print" onclick="triggerPrint()">🖨️ 画面印刷</button>
             <button class="btn btn-pdf" onclick="triggerPrint()">📄 PDFとして保存</button>
+            <button class="btn btn-delete" onclick="deleteSelectedRows()">🗑️ 選択削除</button>
         </div>
     </div>
 
@@ -366,32 +414,80 @@
 </div>
 
 <script>
-    // ➔ URLをしっかり「"」で囲むように修正しました
     const SPREADSHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRgvEH3pS22xlOhK01uCnoMg9s9_qkcyUMcJ8fww1QiFfAhRnGMBy41F8db-SR9C2zQTAD_Y_e5W5wN/pub?output=csv";
 
-    // 画面が開いた瞬間に自動でスプレッドシートのデータを読み込む
     window.onload = function() {
         loadSheetData();
     };
 
-    // 1. 検索機能 (簡易リアルタイムフィルタリング)
+    // 1. 【大幅変更】検索 ＆ 月選択の複合フィルター機能
     function filterTable() {
         const input = document.getElementById("searchInput");
         const filter = input.value.toLowerCase();
+        const monthSelect = document.getElementById("monthSelect").value;
         const table = document.getElementById("dataTable");
         const tr = table.getElementsByTagName("tr");
 
         for (let i = 1; i < tr.length; i++) {
-            let rowText = tr[i].textContent.toLowerCase();
-            if (rowText.includes(filter)) {
-                tr[i].style.display = "";
-            } else {
-                tr[i].style.display = "none";
+            const tdName = tr[i].cells[1];
+            const tdCar  = tr[i].cells[2];
+            const tdDate = tr[i].cells[3]; // ③ 測定日
+            
+            if (tdName && tdCar && tdDate) {
+                const nameText = tdName.textContent.toLowerCase();
+                const carText  = tdCar.textContent.toLowerCase();
+                const dateText = tdDate.textContent.trim();
+                
+                // 月フィルタの判定
+                let matchesMonth = true;
+                if (monthSelect !== "all") {
+                    // 日付の形式 (YYYY/MM/DD や YYYY-MM-DD) から 年/月 を統一して抽出して比較
+                    const normalizedDate = dateText.replace(/-/g, '/');
+                    const match = normalizedDate.match(/^(\d{4})\/(\d{1,2})/);
+                    if (match) {
+                        const y = match[1];
+                        const m = match[2].padStart(2, '0');
+                        const rowMonth = `${y}/${m}`;
+                        matchesMonth = (rowMonth === monthSelect);
+                    } else {
+                        matchesMonth = false;
+                    }
+                }
+                
+                // キーワード検索の判定
+                const matchesSearch = nameText.includes(filter) || carText.includes(filter);
+                
+                // 両方の条件に一致する場合のみ表示
+                if (matchesMonth && matchesSearch) {
+                    tr[i].style.display = "";
+                } else {
+                    tr[i].style.display = "none";
+                    // 非表示になった行のチェックボックスは外す
+                    const cb = tr[i].querySelector(".row-check");
+                    if (cb) cb.checked = false;
+                }
             }
         }
+        // 全選択チェックボックスをクリアし、カウントを更新
+        document.getElementById("selectAll").checked = false;
+        updateSelectedCount();
     }
 
-    // 2. 並び替え（ソート）機能 (運転者氏名 / 車両ナンバー)
+    // ==========================================================
+    // 👥 メンバーの名前とよみがなの対応表
+    // ==========================================================
+    const USER_KANA_MAP = {
+        "所": "ところ",
+        "大和田": "おおわだ",
+        "木村": "きむら",
+        "棚澤": "たなざわ",
+        "森(太)": "もり",
+        "加藤": "かとう",
+        "上野": "うえの",
+        "高橋": "たかはし",
+    };
+
+    // 2. 並び替え（ソート）機能
     let currentSort = { column: null, direction: 'asc' };
 
     function sortTable(type) {
@@ -414,13 +510,21 @@
 
         rows.sort((rowA, rowB) => {
             if (type === 'name') {
-                const cellA = rowA.cells[colIndex].getAttribute('data-kana') || "";
-                const cellB = rowB.cells[colIndex].getAttribute('data-kana') || "";
-                return cellA.localeCompare(cellB, 'ja') * directionModifier;
+                const nameA = rowA.cells[colIndex].textContent.replace("【印刷済】 ", "").trim();
+                const nameB = rowB.cells[colIndex].textContent.replace("【印刷済】 ", "").trim();
+                
+                const valA = USER_KANA_MAP[nameA] || nameA;
+                const valB = USER_KANA_MAP[nameB] || nameB;
+
+                return valA.localeCompare(valB, 'ja') * directionModifier;
             } else {
-                const cellA = rowA.cells[colIndex].textContent.trim();
-                const cellB = rowB.cells[colIndex].textContent.trim();
-                return (parseInt(cellA, 10) - parseInt(cellB, 10)) * directionModifier;
+                const textA = rowA.cells[colIndex].textContent.trim();
+                const textB = rowB.cells[colIndex].textContent.trim();
+                
+                const numA = parseInt(textA, 10) || 0;
+                const numB = parseInt(textB, 10) || 0;
+                
+                return (numA - numB) * directionModifier;
             }
         });
 
@@ -441,7 +545,7 @@
         }
     }
 
-    // 3. 選択機能 (全選択・個別選択・行ハイライト)
+    // 3. 選択機能
     function toggleSelectAll(masterCheckbox) {
         const checkboxes = document.querySelectorAll(".row-check");
         checkboxes.forEach(cb => {
@@ -468,26 +572,84 @@
         document.getElementById("selectedCount").textContent = checkedCount;
     }
 
-    // 4. 印刷 & PDF化機能
+    // 4. 【修正】印刷 & PDF化機能（絞り込んだ月のデータだけを対象にするよう強化）
     function triggerPrint() {
+        const checkboxes = document.querySelectorAll(".row-check");
+        const checkedCount = document.querySelectorAll(".row-check:checked").length;
+        const allRows = document.querySelectorAll("#dataTable tbody tr");
+        
+        // 元の画面表示状態を記憶する一時配列
+        const originalDisplays = [];
+
+        // チェックが1件以上入っている場合
+        if (checkedCount > 0) {
+            checkboxes.forEach((cb) => {
+                const row = cb.closest("tr");
+                originalDisplays.push({ row: row, display: row.style.display });
+                
+                if (!cb.checked) {
+                    row.style.display = "none"; // チェックのないものは非表示（印刷しない）
+                } else {
+                    row.classList.add("printed-row");
+                }
+            });
+        } else {
+            // チェックがない場合は「現在画面に表示されている行（選択中の月のデータ）」のみを印刷対象にする
+            allRows.forEach((row) => {
+                originalDisplays.push({ row: row, display: row.style.display });
+                if (row.style.display === "none") {
+                    // すでに非表示（他月など）のものはそのまま非表示
+                } else {
+                    row.classList.add("printed-row"); // 表示中（当月）のものに印刷済マーク
+                }
+            });
+        }
+
+        // 印刷（またはPDF保存）ダイアログを起動
         window.print();
+
+        // 印刷ダイアログが閉じたら、元の画面表示状態に即座に復元する
+        originalDisplays.forEach(item => {
+            item.row.style.display = item.display;
+        });
     }
 
-    // 5. スプレッドシートからデータを取得してテーブルを生成する関数
+    // 5. 選択した行を画面から削除（非表示）にする機能
+    function deleteSelectedRows() {
+        const checkboxes = document.querySelectorAll(".row-check:checked");
+        if (checkboxes.length === 0) {
+            alert("削除する行が選択されていません。");
+            return;
+        }
+
+        if (confirm(`選択された ${checkboxes.length} 件のデータを画面から非表示にしますか？\n（※元のGoogleスプレッドシートのデータは削除されません。再読み込みすると元に戻ります）`)) {
+            checkboxes.forEach(cb => {
+                const row = cb.closest("tr");
+                row.remove(); // 画面のDOMから削除
+            });
+            document.getElementById("selectAll").checked = false;
+            updateSelectedCount();
+            // データ数が変わったため月プルダウンを再更新
+            updateMonthOptions();
+        }
+    }
+
+    // 6. スプレッドシートからデータを取得
     function loadSheetData() {
-        fetch(SPREADSHEET_CSV_URL)
+        const cacheBuster = SPREADSHEET_CSV_URL + "&t=" + new Date().getTime();
+
+        fetch(cacheBuster)
             .then(response => response.text())
             .then(csvText => {
                 const tbody = document.querySelector("#dataTable tbody");
-                tbody.innerHTML = ""; // 初期表示のダミーをクリア
+                tbody.innerHTML = "";
 
                 const lines = csvText.split("\n");
                 
                 for (let i = 1; i < lines.length; i++) {
                     const line = lines[i].trim();
-                    if (!line) continue; // 空白行はスキップ
+                    if (!line) continue; 
 
-                    // Windows等の改行コード(\r)のゴミを消去してからカンマで区切る処理に改良
                     const cells = line.replace(/\r$/, "").split(",");
                     
                     const name       = cells[0]  || "";
@@ -509,9 +671,11 @@
                     if (alcohol.includes("注意")) badgeClass = "badge-warn";
 
                     const tr = document.createElement("tr");
+                    tr.setAttribute("data-index", i);
+                    
                     tr.innerHTML = `
                         <td class="col-check"><input type="checkbox" class="row-check" onchange="updateRowStyle(this); updateSelectedCount();"></td>
-                        <td data-kana="${kana}">${name}</td>
+                        <td>${name}</td>
                         <td>${car}</td>
                         <td>${date}</td>
                         <td>${time}</td>
@@ -526,16 +690,66 @@
                     `;
                     tbody.appendChild(tr);
                 }
+
+                // 【追加】データ読み込み成功後に、月選択肢を自動生成する
+                updateMonthOptions();
             })
             .catch(error => {
                 console.error("データの読み込みに失敗しました:", error);
             });
     }
+
+    // 【新規追加】7. データ内の日付から一意な「月」を抽出してプルダウンを生成する関数
+    function updateMonthOptions() {
+        const table = document.getElementById("dataTable");
+        const rows = table.querySelectorAll("tbody tr");
+        const months = new Set();
+
+        rows.forEach(row => {
+            const dateText = row.cells[3].textContent.trim(); // ③ 測定日
+            // 日付表記 (YYYY/MM/DD や YYYY-MM-DD) から「年」と「月」を取り出す
+            const normalizedDate = dateText.replace(/-/g, '/');
+            const match = normalizedDate.match(/^(\d{4})\/(\d{1,2})/);
+            if (match) {
+                const year = match[1];
+                const month = match[2].padStart(2, '0'); // 1桁の月を2桁に揃える (例: 6 -> 06)
+                months.add(`${year}/${month}`);
+            }
+        });
+
+        const monthSelect = document.getElementById("monthSelect");
+        // 初期化（「すべての月」だけ残す）
+        monthSelect.innerHTML = '<option value="all">すべての月</option>';
+
+        // 降順（新しい月が上）に並び替えてプルダウンに追加
+        Array.from(months).sort().reverse().forEach(m => {
+            const option = document.createElement("option");
+            option.value = m; // フィルター用値 (例: "2026/06")
+            
+            const [y, mm] = m.split('/');
+            option.textContent = `${y}年${mm}月`; // 表示用テキスト
+            monthSelect.appendChild(option);
+        });
+    }
+
+    // 8. 初期順（時間順）に戻す機能
+    function resetToInitialOrder() {
+        const table = document.getElementById("dataTable");
+        const tbody = table.querySelector("tbody");
+        const rows = Array.from(tbody.querySelectorAll("tr"));
+
+        rows.sort((rowA, rowB) => {
+            const indexA = parseInt(rowA.getAttribute("data-index"), 10);
+            const indexB = parseInt(rowB.getAttribute("data-index"), 10);
+            return indexA - indexB;
+        });
+
+        rows.forEach(row => tbody.appendChild(row));
+
+        currentSort = { column: null, direction: 'asc' };
+        updateSortHeaders(null, null);
+    }
 </script>
 
 </body>
-</html>
-    
-  </body>
-  
 </html>
